@@ -1,0 +1,1382 @@
+using System;
+using System.Collections;
+using System.Linq;
+using System.Text;
+using DuloGames.UI;
+using EPOOutline;
+using Lofelt.NiceVibrations;
+using UnityEngine;
+using UnityEngine.UI;
+using Pathfinding;
+using RayFire;
+using UnityEngine.SceneManagement;
+using Random = UnityEngine.Random;
+using TMPro;
+using UnityEngine.Rendering;
+
+public class CharacterScript : MonoBehaviour {
+	
+	public String name; // название персонажа
+	public GameObject[] skillDefault;
+	public GameObject[] skillActive;
+	public Transform shellSpawn; // место респавна стрелы
+	public int valueExp = 100; // кол-во Exp за убийство
+	public int valueHP; // текущее кол-во HP
+	public int maxHP = 100; // максимальное кол-во HP
+	public int valueMP; // текущее кол-во MP
+	public int damageMob = 50; // урон моба
+	public int armorMob = 50; // броня моба
+    public int reg = 2; // скорость регенереции персонажа
+    public int maxExp = 1000; // размер полосы опыта персонажа
+    public GameObject closest;
+    public float moveSpeed;
+    public bool regDebuff;
+    public bool death;
+    
+    public Image barHP; // HP бар
+    public Image barMP; // MP бар
+    public Image barExp; // Exp бар
+    public TextMeshProUGUI damageText; // всплывающий текст урона
+    private TextMeshProUGUI _mTextHP; // текст в HP баре
+    private TextMeshProUGUI _mTextMP; // текст в MP баре
+    private Image _hpBackground; // фон HP бара
+    private Image _mpBackground; // фон MP бара
+    private TextMeshProUGUI _goldenCoins; // монеты вещевого мешка
+    [SerializeField] private CapsuleCollider col;
+    [SerializeField] private Canvas healthBar;
+	
+    private AudioSource _audioSource;
+    public AudioClip attackSoundBoss;
+    [SerializeField] private AudioClip attackSound;
+    [SerializeField] private AudioClip hitSound;
+    [SerializeField] private AudioClip runSound;
+    [SerializeField] private AudioClip deathSound;
+    [SerializeField] private AudioClip shotStaff;
+    [SerializeField] private AudioClip shotBow;
+    [SerializeField] private AudioClip levelUp;
+    [SerializeField] private ParticleSystem levelUpEffect;
+	
+    private object _cha;
+    private GameObject _player;
+    private CrossfadeMusic _sound;
+    private CharacterScript _cs;
+    private CharacterSettings _cse;
+    private CharacterController _cc;
+    private OptimizerMonster _om;
+    private PlayerMove _pm;
+    private Transform _target;
+    private Options _options;
+    private Animator _an;
+    private AIPath _ap;
+    private Transform _tr;
+    private GlobalMap _gm;
+    private RPGCamera _rpgCam;
+    private BoxCollider _bodyCollider;
+    private Camera _mainCamera;
+    private Volume _mainCameraVignette;
+    private Image _mainCameraBloodSplash;
+    private Canvas _damage;
+    private SpriteRenderer _minimap;
+    private Vector3 _relativePos, _horizontalVelocity;
+    private int _skill, _repeat, _teleportCollider, _teleportTimer;
+    private bool InterfacePC, _exp, _picked, _color, _attack, _attackMob, _series, _attackSkill1, _attackSkill2, _deathPlayer, _deathMonster;
+    private GameObject _restart, _go, _effectBoss1, _effectBoss2, _notificationBorder;
+    private StringBuilder _builder = new StringBuilder(10);
+    private ArrayList _array = new ArrayList(); // массив ударов по персонажам
+    private GameObject[] _mobs; // общий массив мобов
+    private UIEquipSlot[] _slotsCenter;
+    
+    private void Awake() {
+	    // включаем управление Мышкой
+	    if (Application.platform == RuntimePlatform.WindowsPlayer || Application.platform == RuntimePlatform.WindowsEditor || 
+	        Application.platform == RuntimePlatform.OSXPlayer || Application.platform == RuntimePlatform.OSXEditor || 
+	        Application.platform == RuntimePlatform.LinuxPlayer || Application.platform == RuntimePlatform.LinuxEditor) {
+		    InterfacePC = true;
+	    }
+    }
+    
+    private void Start() {
+	    if (GameObject.Find("Sound_tier") != null) _sound = GameObject.Find("Sound_tier").GetComponent<CrossfadeMusic>();
+	    _cha = ES3.Load(ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString(), ES3Settings.defaultSettings);
+	    _mainCamera = GameObject.FindWithTag("MainCamera").GetComponent<Camera>();
+	    _options = GameObject.Find("Window (Options)").GetComponent<Options>();
+	    _player = GameObject.FindWithTag("Player");
+	    _cs = _player.GetComponent<CharacterScript>();
+	    _cse = _player.GetComponent<CharacterSettings>();
+	    _cc = GetComponent<CharacterController>();
+	    _an = GetComponent<Animator>();
+	    _tr = GetComponent<Transform>();
+	    _audioSource = GetComponent<AudioSource>();
+	    _target = _player.transform;
+	    
+	    if (_cc.CompareTag("Player")) {
+		    _pm = GetComponent<PlayerMove>();
+		    _rpgCam = GetComponent<RPGCamera>();
+		    _restart = GameObject.Find("Window (Restart)");
+		    barExp = GameObject.Find("barExp").GetComponent<Image>();
+		    barHP = GameObject.Find("barHP").GetComponent<Image>();
+		    barMP = GameObject.Find("barMP").GetComponent<Image>();
+		    _hpBackground = GameObject.Find("backgroundHP").GetComponent<Image>();
+		    _mpBackground = GameObject.Find("backgroundMP").GetComponent<Image>();
+		    _mTextHP = GameObject.Find("mTextHP").GetComponent<TextMeshProUGUI>();
+		    _mTextMP = GameObject.Find("mTextMP").GetComponent<TextMeshProUGUI>();
+		    _gm = GameObject.Find("GlobalMapCamera").GetComponent<GlobalMap>();
+		    _mainCameraVignette = GameObject.Find("PostProcessingVignette").GetComponent<Volume>();
+		    _mainCameraBloodSplash = _mainCamera.GetComponentInChildren<Image>();
+		    levelUpEffect = _player.transform.Find("Effects/LevelUp").GetComponent<ParticleSystem>();
+		    _goldenCoins = GameObject.Find("Window (Character)/Content/Right Content/Инвентарь/Currencies/Golden Coins").GetComponent<TextMeshProUGUI>();
+		    _slotsCenter = GameObject.Find("Window (Character)/Content/Left Content (Character)/Slots/Center Slots Grid (Character)").GetComponentsInChildren<UIEquipSlot>();
+		    _mobs = GameObject.FindGameObjectsWithTag("Monster");
+		    InvokeRepeating(nameof(FindClosestEnemy), 0.0f, 0.5f);
+		    StartCoroutine(InitializationScripts());
+		    
+		    // выключаем уведомление
+		    _notificationBorder = GameObject.Find("Notification (Border)");
+		    _notificationBorder.SetActive(false);
+		    
+		    // устанавливаем сохраненное значение HP
+		    if (ES3.Load(_cha + "_CharacterHP", ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString(), _cse.healthPoints) > 0) valueHP = ES3.Load(_cha + "_CharacterHP", ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString(), _cse.healthPoints);
+		    else valueHP = _cse.healthPoints;
+		    
+		    // устанавливаем сохраненное значение MP
+		    if (ES3.Load(_cha + "_CharacterMP", ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString(), _cse.manaPoints) > 0) valueMP = ES3.Load(_cha + "_CharacterMP", ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString(), _cse.manaPoints);
+		    else valueMP = _cse.manaPoints;
+		    
+		    // устанавливаем сохраненный прогресс бар опыта персонажа
+		    barExp.fillAmount = ES3.Load(_cha + "_CharacterExp", ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString(), 0f);
+		    
+		    // устанавливаем сохраненные монеты вещевого мешка
+		    _goldenCoins.text = ES3.Load(_cha + "_GoldenCoins", ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString(), 0).ToString();
+		    
+		    // выставляем параметры уровня сложности
+		    if (ES3.Load(_cha + "_CharacterComplexity", ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString(), 0) == 1) InvokeRepeating(nameof(Regenerate), 0.0f, 1.0f);
+		    if (ES3.Load(_cha + "_CharacterComplexity", ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString(), 0) == 2) InvokeRepeating(nameof(Regenerate), 0.0f, 1.5f);
+		    if (ES3.Load(_cha + "_CharacterComplexity", ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString(), 0) == 3) InvokeRepeating(nameof(Regenerate), 0.0f, 2.0f);
+
+		    // выводим данные в HP бар
+		    _builder.Length = 0;
+		    _builder.Append(valueHP);
+		    _builder.Append("/");
+		    _builder.Append(_cse.healthPoints);
+		    _mTextHP.text = _builder.ToString();
+		    
+		    // выводим данные в MP бар
+		    _builder.Length = 0;
+		    _builder.Append(valueMP);
+		    _builder.Append("/");
+		    _builder.Append(_cse.manaPoints);
+		    _mTextMP.text = _builder.ToString();
+	    }
+		
+	    if (_cc.CompareTag("Monster")) {
+		    _ap = GetComponent<AIPath>();
+		    _om = GetComponent<OptimizerMonster>();
+		    _minimap = _cc.GetComponentInChildren<SpriteRenderer>();
+		    barHP = _tr.Find("HealthBar/hp_bar").GetComponent<Image>();
+		    _hpBackground = _tr.Find("HealthBar/hp_bar_background").GetComponent<Image>();
+		    _damage = _tr.Find("Damage").GetComponent<Canvas>();
+		    damageText = _tr.Find("Damage/hp_text").GetComponent<TextMeshProUGUI>();
+		    
+		    // выставляем параметры уровня сложности
+		    if (ES3.Load(_cha + "_CharacterComplexity", ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString(), 0) == 2) {
+			    maxHP = (int) (maxHP * 1.5);
+			    damageMob = (int) (damageMob * 1.5);
+			    armorMob = (int) (armorMob * 1.5);
+		    }
+		    if (ES3.Load(_cha + "_CharacterComplexity", ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString(), 0) == 3) {
+			    maxHP = maxHP * 2;
+			    damageMob = damageMob * 2;
+			    armorMob = armorMob * 2;
+		    }
+		    
+		    // устанавливаем сохраненное значение HP
+		    if (ES3.KeyExists(name + "_HP_" + GetComponent<UUID>().ID, ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString())) {
+			    valueHP = ES3.Load(name + "_HP_" + GetComponent<UUID>().ID, ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString(), maxHP);
+			    barHP.fillAmount = _hpBackground.fillAmount = (float) valueHP / maxHP;
+			    
+			    // уничтожаем мертвых мобов при загрузке
+			    if (valueHP <= 0) Destroy(_tr.gameObject);
+		    } else {
+			    valueHP =  maxHP;
+		    }
+	    }
+    }
+    
+    private void FixedUpdate() {
+	    if (!_an.GetCurrentAnimatorStateInfo(0).IsName("Death")) {
+		    // настраиваем громкость звуковых эффектов
+		    if (_options.sliderVolume.value > 0.01f && _options.sliderVolumeEffects.value > 0.01f) _audioSource.volume = (_options.sliderVolume.value + _options.sliderVolumeEffects.value) / 2;
+		    else _audioSource.volume = 0f;
+		    
+		    if (_cc.CompareTag("Player")) {
+			    // плавно уменьшаем фон HP бара персонажа
+			    if (barHP.fillAmount < _hpBackground.fillAmount) _hpBackground.fillAmount -= 0.35f * Time.fixedDeltaTime;
+			    if (barHP.fillAmount > _hpBackground.fillAmount) _hpBackground.fillAmount = barHP.fillAmount;
+			    
+			    // плавно уменьшаем фон MP бара персонажа
+			    if (barMP.fillAmount < _mpBackground.fillAmount) _mpBackground.fillAmount -= 0.35f * Time.fixedDeltaTime;
+			    if (barMP.fillAmount > _mpBackground.fillAmount) _mpBackground.fillAmount = barMP.fillAmount;
+			    
+			    // плавно увеличиваем Exp бар опыта персонажа
+			    if (_exp) {
+				    barExp.fillAmount += 0.35f * Time.fixedDeltaTime;
+					
+				    if (barExp.fillAmount >= 1) {
+					    // анимация и звук нового уровня
+					    levelUpEffect.Play();
+					    AudioSourceClip(levelUp);
+					    
+					    // сохраняем текущий уровень, прогресс опыта и скилы для распределения персонажа
+					    ES3.Save(_cha + "_CharacterLevel", ES3.Load(_cha + "_CharacterLevel", ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString(), 1) + 1, ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString());
+					    ES3.Save(_cha + "_ActiveSkill", ES3.Load(_cha + "_ActiveSkill", ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString(), 0) + 2, ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString());
+					    ES3.Save(_cha + "_PassiveSkill", ES3.Load(_cha + "_PassiveSkill", ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString(), 0) + 2, ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString());
+					    ES3.Save(_cha + "_CharacterExp", ES3.Load(_cha + "_CharacterExp", ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString(), 0f) - 1f, ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString());
+					    _cse._mTextLevel.text = (int.Parse(_cse._mTextLevel.text) + 1).ToString();
+					    _cse._activeSkill.text = (int.Parse(_cse._activeSkill.text) + 2).ToString();
+					    _cse._passiveSkill.text = (int.Parse(_cse._passiveSkill.text) + 2).ToString();
+					    barExp.fillAmount = 0f;
+						
+					    // активируем кнопки скилов
+					    if (int.Parse(_cse._activeSkill.text) > 0) _cse.TaskOnSkillActiveOn();
+					    if (int.Parse(_cse._passiveSkill.text) > 0) _cse.TaskOnSkillPassiveOn();
+					    
+					    // выводим обновленные свойства персонажа
+					    _cse.TaskOnStat();
+				    }
+				    
+				    if (barExp.fillAmount >= ES3.Load(_cha + "_CharacterExp", ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString(), 0f)) _exp = false;
+			    }
+		    }
+		    
+		    if (_cc.CompareTag("Monster") && valueHP < maxHP) {
+			    // включаем HP бар моба
+			    healthBar.gameObject.SetActive(true);
+			    
+			    // плавно уменьшаем фон HP бара моба
+			    if (barHP.fillAmount < _hpBackground.fillAmount) _hpBackground.fillAmount -= 0.35f * Time.fixedDeltaTime;
+			    if (barHP.fillAmount > _hpBackground.fillAmount) _hpBackground.fillAmount = barHP.fillAmount;
+			    
+			    // поворачиваем HealthBar моба к камере
+			    healthBar.transform.rotation = Quaternion.LookRotation(_mainCamera.transform.position - _tr.position);
+		    }
+			
+		    if (_cc.CompareTag("Monster") && damageText.canvasRenderer.GetAlpha() > 0.01f) {
+			    // поворачиваем Damage бар моба к камере
+			    _damage.transform.rotation = Quaternion.LookRotation(_mainCamera.transform.position - _tr.position);
+		    }
+			
+		    // определяем общую скорость перемещения
+		    moveSpeed = _cc.velocity.magnitude;
+		    
+		    // анимация покоя
+		    if (moveSpeed < 0.1f) {
+			    _an.SetBool("Walk", false);
+			    if (!name.Equals("Zombie")) _an.SetBool("Run", false);
+				
+			    // выключаем звук бега
+			    if (_audioSource.clip == runSound && _audioSource.isPlaying) _audioSource.Stop();
+			    
+			    // выключаем анимацию удара при атаке
+			    if (_an.GetCurrentAnimatorStateInfo(0).IsName("Attack") || _an.GetCurrentAnimatorStateInfo(0).IsName("AttackSeries")) _an.SetBool("Hit", false);
+		    }
+			
+		    // анимация шага
+		    if (moveSpeed > 0.1f && moveSpeed < 2.5f) {
+			    _an.SetBool("Walk", true);
+			    if (!name.Equals("Zombie")) _an.SetBool("Run", false);
+			    
+			    // отключаем анимацию удара и атаки
+			    _an.SetBool("Hit", false);
+			    if (_cc.CompareTag("Monster")) _an.SetBool("Attack", false);
+			    
+			    // сбрасываем переменную атаки при движении моба
+			    if (_cc.CompareTag("Monster")) _attackMob = false;
+		    }
+			
+		    // анимация бега
+		    if (moveSpeed >= 2.5f && !name.Equals("Zombie")) {
+			    if (_cc.CompareTag("Player")) _an.SetFloat("animSpeed", _cse.movementSpeed * 0.2f);
+			    
+			    _an.SetBool("Walk", true);
+			    _an.SetBool("Run", true);
+			    
+			    // отключаем анимацию удара и атаки
+			    _an.SetBool("Hit", false);
+			    _an.SetBool("Attack", false);
+			    _an.SetBool("AttackSeries", false);
+			    _an.SetBool("Skill", false);
+				
+			    // звук бега
+			    AudioSourceClip(runSound);
+			    
+			    // сбрасываем переменную атаки при движении моба
+			    if (_cc.CompareTag("Monster")) _attackMob = false;
+		    }
+			
+		    // атака моба
+		    if (_cc.CompareTag("Monster") && _cs.valueHP > 0 && moveSpeed < 0.1f && _ap.remainingDistance > 0 && _ap.remainingDistance <= _ap.endReachedDistance && _om.curDistance < 120 && _cc.GetComponent<Animator>().enabled) {
+			    // выключаем перемещение при атаке
+			    _ap.canMove = false;
+			    
+			    // поворачиваем моба к цели
+			    _relativePos = _target.position - _tr.position;
+			    _relativePos.y = 0f;
+			    _tr.rotation = Quaternion.LookRotation(_relativePos);
+			    
+			    if (!_attackMob && _ap.endReachedDistance < 5) {
+				    _attackMob = true;
+				    _an.SetBool("Attack", true);
+				    if (skillDefault[0] == null && skillDefault[1] == null) AudioSourceClip(attackSound);
+			    }
+			    
+			    // запускаем снаряд
+			    if (!_attackMob && _ap.endReachedDistance > 5) {
+				    _attackMob = true;
+				    _an.SetBool("Attack", true);
+				    if (skillDefault[0] != null) Invoke(nameof(FireballOnAttack), 0.8f);
+				    if (skillDefault[1] != null) Invoke(nameof(ArrowOnAttack), 1.5f);
+			    }
+			    
+			    if (name.Equals("AncientWarrior") || name.Equals("ElementalGolem") || name.Equals("EvilGod") || name.Equals("FortGolem") || name.Equals("MechanicalGolem") || name.Equals("MutantGuy") || name.Equals("Mystic") || name.Equals("Slayer") || name.Equals("SpiritDemon")) {
+				    // первая стадия босса
+				    if (!_attackSkill1) {
+					    _attackSkill1 = _attackMob = true;
+					    _an.SetBool("Attack", false);
+					    _an.SetBool("Hit", false);
+					    _an.SetBool("Skill", true);
+					    AudioSourceClip(attackSoundBoss);
+                        
+					    // создаем копию магического снаряда
+					    _effectBoss1 = Instantiate(skillActive[0], _cc.bounds.center, Quaternion.identity);
+                        
+					    // делаем привязку снаряда к родителю
+					    _effectBoss1.GetComponent<Rigidbody>().transform.SetParent(transform);
+				    }
+				    
+				    // вторая стадия босса при HP меньше половины
+				    if (!_attackSkill2 && valueHP < (maxHP / 2)) {
+					    _attackSkill2 = _attackMob = true;
+					    _an.SetBool("Attack", false);
+					    _an.SetBool("Hit", false);
+					    _an.SetBool("Skill", true);
+					    AudioSourceClip(attackSoundBoss);
+				    
+					    // создаем копию магического снаряда
+					    _effectBoss2 = Instantiate(skillActive[1], _cc.bounds.center, Quaternion.identity);
+				    }
+			    }
+		    }
+	    } else {
+		    if (_cc.CompareTag("Player") && !_deathPlayer) {
+			    _deathPlayer = true;
+			    
+			    // выключаем CharacterController персонажа
+			    _cc.enabled = false;
+			    
+			    // добавляем коллайдеры для тела персонажа
+			    _bodyCollider = _cc.gameObject.AddComponent<BoxCollider>();
+			    _bodyCollider.center = new Vector3(0, 1f, 0);
+			    _bodyCollider.size = new Vector3(0.25f, 0.1f, 1.5f);
+			    
+			    // отменяем движение и добавляем массу для персонажа
+			    _pm.CancelMove();
+			    _cc.GetComponent<Rigidbody>().useGravity = true;
+			    _cc.GetComponent<Rigidbody>().constraints = RigidbodyConstraints.None;
+			    
+			    // выводим меню возрождения
+			    _restart.GetComponent<UIWindow>().Show(_restart);
+			    
+			    // уменьшаем колличество опыта персонажа
+			    float exp = 0f;
+			    if (ES3.Load(_cha + "_CharacterComplexity", ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString(), 0) == 1) exp = ES3.Load(_cha + "_CharacterExp", ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString(), 0f);
+			    if (ES3.Load(_cha + "_CharacterComplexity", ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString(), 0) == 2) exp = ES3.Load(_cha + "_CharacterExp", ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString(), 0f) - 0.25f;
+			    if (ES3.Load(_cha + "_CharacterComplexity", ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString(), 0) == 3) exp = ES3.Load(_cha + "_CharacterExp", ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString(), 0f) - 0.5f;
+			    if (exp < 0) exp = 0f;
+			    ES3.Save(_cha + "_CharacterExp", exp, ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString());
+		    }
+		    
+		    if (_cc.CompareTag("Monster") && !_deathMonster) {
+			    _deathMonster = true;
+			    
+			    // выключаем перемещение после смерти
+			    _ap.canMove = false;
+			    
+			    // выключаем CharacterController моба
+			    _cc.enabled = false;
+			    
+			    // добавляем коллайдер для тела моба
+			    _bodyCollider = _cc.gameObject.AddComponent<BoxCollider>();
+			    if (name.Equals("Goblin_Axe") || name.Equals("Goblin_Bow") || name.Equals("Goblin_Club") || name.Equals("Goblin_Peak") || name.Equals("Goblin_Staff") || name.Equals("Goblin_Sword")) {
+				    _bodyCollider.center = new Vector3(0, 60f, 0);
+				    _bodyCollider.size = new Vector3(100f, 10f, 25f);
+			    } else if (name.Equals("AncientWarrior") || name.Equals("ElementalGolem") || name.Equals("EvilGod") || name.Equals("FortGolem") || name.Equals("MechanicalGolem") || name.Equals("MutantGuy") || name.Equals("Mystic") || name.Equals("Slayer") || name.Equals("SpiritDemon")) {
+				    _bodyCollider.center = new Vector3(0, 0.9f, 0);
+					_bodyCollider.size = new Vector3(0.25f, 0.1f, 1.5f);
+				} else if (name.Equals("Ogre_Axe") || name.Equals("Ogre_Club") || name.Equals("Ogre_Hammer") || name.Equals("Ogre_Sword")) {
+				    _bodyCollider.center = new Vector3(0, 1.2f, 0);
+				    _bodyCollider.size = new Vector3(0.25f, 0.1f, 1.5f);
+			    } else if (name.Equals("DarkElf_Peak") || name.Equals("DarkElf_Sword") || name.Equals("ElfDark_Bow")) {
+				    _bodyCollider.center = new Vector3(0, 1.1f, 0);
+				    _bodyCollider.size = new Vector3(0.25f, 0.1f, 1.5f);
+			    } else if (name.Equals("Skeleton_Sword") || name.Equals("Skeleton_Bow")) {
+				    _bodyCollider.center = new Vector3(0, 0.9f, 0);
+				    _bodyCollider.size = new Vector3(0.25f, 0.1f, 1.5f);
+			    } else if (name.Equals("Zombie")) {
+				    _bodyCollider.center = new Vector3(0, 1f, 0);
+				    _bodyCollider.size = new Vector3(0.25f, 0.1f, 1.5f);
+			    } else {
+				    _bodyCollider.center = new Vector3(0, 0.75f, 0);
+				    _bodyCollider.size = new Vector3(0.25f, 0.1f, 1.5f);
+			    }
+			    
+			    // включаем коллайдер сумки
+			    Invoke(nameof(ColliderStorage), 1f);
+			    
+			    // выключаем HP бар моба после смерти
+			    if (healthBar.gameObject.activeSelf) healthBar.gameObject.SetActive(false);
+				
+			    // выключаем маркер моба после смерти
+			    if (_minimap.gameObject.activeSelf) _minimap.gameObject.SetActive(false);
+			    
+			    // добавляем массу для моба
+			    _cc.gameObject.AddComponent<Rigidbody>().mass = 1;
+			    
+			    // уничтожаем эффекты босса и выключаем саундтрек
+			    if (name.Equals("AncientWarrior") || name.Equals("ElementalGolem") || name.Equals("EvilGod") || name.Equals("FortGolem") || name.Equals("MechanicalGolem") || name.Equals("MutantGuy") || name.Equals("Mystic") || name.Equals("Slayer") || name.Equals("SpiritDemon")) {
+				    if (_om.changeLock) _sound.changeLock = false;
+				    if (_sound != null) _sound.attackBossSound = false;
+				    Destroy(_effectBoss1);
+				    Destroy(_effectBoss2);
+			    } else {
+				    if (_om.changeLock) _sound.changeLock = false;
+			    }
+			    
+			    // отключаем обводку моба
+			    gameObject.GetComponentInChildren<Outlinable>().OutlineParameters.Enabled = false;
+		    }
+		    
+		    // поворачиваем Damage бар моба к камере
+		    if (_cc.CompareTag("Monster")) _damage.transform.rotation = Quaternion.LookRotation(_mainCamera.transform.position - _tr.position);
+	    }
+    }
+	
+    private void OnTriggerEnter(Collider other) {
+	    // граница уровня
+	    if (_cc != null && _cc.CompareTag("Player") && other.CompareTag("Border")) {
+		    _teleportCollider++;
+		    if (_teleportTimer == 0) InvokeRepeating(nameof(TeleportTimer), 0.0f, 1.0f);
+	    }
+		
+	    // удар по персонажу
+	    if (_cc != null && _cc.CompareTag("Player") && other.CompareTag("WeaponMonster")) {
+		    if (!other.name.Equals("Arrow") && !other.name.Equals("Fireball")) {
+			    if (other.GetComponentInParent<Animator>().GetCurrentAnimatorStateInfo(0).IsName("Attack") && other.GetComponentInParent<CharacterScript>()._attackMob) {
+				    // проверяем массив коллайдеров
+				    if (other.GetComponentInParent<CharacterScript>()._array.Count > 0) {
+					    int unique = 0;
+					    for (int i = 0; i < other.GetComponentInParent<CharacterScript>()._array.Count; i++) {
+						    // проверка на дублирование ключа в массиве
+						    if (other.GetComponentInParent<CharacterScript>()._array[i].Equals(_cc.GetInstanceID())) unique++;
+					    }
+					    if (unique == 0) {
+						    // разрешаем удар
+						    other.GetComponentInParent<CharacterScript>()._picked = true;
+						    
+						    // добавляем коллайдер в массив
+						    other.GetComponentInParent<CharacterScript>()._array.Add(_cc.GetInstanceID());
+					    }
+				    } else {
+					    // разрешаем удар
+					    other.GetComponentInParent<CharacterScript>()._picked = true;
+					    
+					    // добавляем коллайдер в массив
+					    other.GetComponentInParent<CharacterScript>()._array.Add(_cc.GetInstanceID());
+				    }
+			    }
+		    }
+			
+		    if (other.name.Equals("Arrow") || other.name.Equals("Fireball") || other.GetComponentInParent<CharacterScript>()._picked) {
+			    // анимация удара
+			    if (!_cc.GetComponentInChildren<SkillProtectiveDome>()) _an.SetBool("Hit", true);
+			    
+			    // звук удара
+			    if (!death && !other.name.Equals("Arrow") && !other.name.Equals("Fireball")) AudioSourceClip(other.GetComponentInParent<CharacterScript>().hitSound);
+			    
+			    // виброотдача при ударе
+			    if (_options.sliderVibro.isOn) HapticPatterns.PlayPreset(HapticPatterns.PresetType.LightImpact);
+				
+			    // уменьшаем HP
+			    if (valueHP > 0 && !_cc.GetComponentInChildren<SkillProtectiveDome>()) {
+				    int x = 0;
+				    int d = 0;
+				    if (Random.Range(0f, 1f) > (_cse.block / 100) && Random.Range(0f, 1f) > (_cse.evasion / 100)) {
+					    if (!other.name.Equals("Arrow") && !other.name.Equals("Fireball")) d = other.GetComponentInParent<CharacterScript>().damageMob;
+					    if (other.name.Equals("Arrow")) d = other.GetComponentInParent<ArrowMonster>().damageMob;
+					    if (other.name.Equals("Fireball")) d = other.GetComponentInParent<FireballMonster>().damageMob;
+					    int s = SceneManager.GetActiveScene().buildIndex;
+					    x = (int) ((d * s) / ((100.0f + _cse.armor) / (d * s)) * Random.Range(0.9f, 1.1f));
+					    
+					    valueHP -= x;
+					    barHP.fillAmount = (float) valueHP / _cse.healthPoints;
+					    
+					    // сохраняем значение HP персонажа
+					    ES3.Save(_cha + "_CharacterHP", valueHP, ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString());
+				    }
+			    }
+				
+			    DeathPlayer();
+			    
+			    // защита от множественного срабатывания
+			    if (!other.name.Equals("Arrow") && !other.name.Equals("Fireball")) other.GetComponentInParent<CharacterScript>()._picked = false;
+		    }
+	    }
+		
+	    // удар по мобу
+	    if (_cc != null && _cc.CompareTag("Monster") && other.CompareTag("WeaponPlayer")) {
+		    if (!other.name.Equals("Arrow") && !other.name.Equals("Fireball") && !other.name.Equals("Skill")) {
+			    if (other.GetComponentInParent<CharacterScript>()._attack) {
+				    // проверяем массив коллайдеров
+				    if (other.GetComponentInParent<CharacterScript>()._array.Count > 0) {
+					    int unique = 0;
+					    for (int i = 0; i < other.GetComponentInParent<CharacterScript>()._array.Count; i++) {
+						    // проверка на дублирование ключа в массиве
+						    if (other.GetComponentInParent<CharacterScript>()._array[i].Equals(_cc.GetInstanceID())) unique++;
+					    }
+					    if (unique == 0) {
+						    // разрешаем удар
+						    other.GetComponentInParent<CharacterScript>()._picked = true;
+						    
+						    // добавляем коллайдер в массив
+						    other.GetComponentInParent<CharacterScript>()._array.Add(_cc.GetInstanceID());
+					    }
+				    } else {
+					    // разрешаем удар
+					    other.GetComponentInParent<CharacterScript>()._picked = true;
+					    
+					    // добавляем коллайдер в массив
+					    other.GetComponentInParent<CharacterScript>()._array.Add(_cc.GetInstanceID());
+				    }
+			    }
+		    }
+			
+		    if (other.name.Equals("Arrow") || other.name.Equals("Fireball") || other.name.Equals("Skill") || other.GetComponentInParent<CharacterScript>()._picked) {
+			    // передаем атрибут удара по мобу
+			    _om.damage = true;
+			    
+			    // анимация удара
+			    _an.SetBool("Hit", true);
+			    
+			    // включаем скрипт при удаленной атаке
+			    if (!_cc.GetComponent<AudioSource>().enabled) _cc.GetComponent<AudioSource>().enabled = true;
+			    
+			    // звук удара
+			    if (!death && !other.name.Equals("Arrow") && !other.name.Equals("Fireball") && !other.name.Equals("Skill")) AudioSourceClip(_cs.hitSound);
+			    
+			    // уменьшаем HP
+			    if (valueHP > 0) {
+				    int x = 0;
+				    int d = _cse.damage;
+				    if (!other.name.Equals("Arrow") && !other.name.Equals("Fireball") && !other.name.Equals("Skill")) {
+					    int s = _cse.strength;
+					    x = (int) (((d + s) / ((100.0f + armorMob) / (d + s))) * Random.Range(0.9f, 1.1f));
+				    }
+				    if (other.name.Equals("Arrow")) {
+					    int a = _cse.agility;
+					    x = (int) (((d + a) / ((100.0f + armorMob) / (d + a))) * Random.Range(0.9f, 1.1f));
+				    }
+				    if (other.name.Equals("Fireball")) {
+					    int i = _cse.intellect;
+					    x = (int) (((d + i) / ((100.0f + armorMob) / (d + i))) * Random.Range(0.9f, 1.1f));
+				    }
+				    if (other.name.Equals("Skill")) {
+					    int sk = 0;
+					    if (_cs._skill == 1) {
+						    sk = 12 * ES3.Load(_cha + "_CriticalSkill", ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString(), 0); // критический удар или выстрел
+						    x = (int) (((d + sk) / ((100.0f + armorMob) / (d + sk))) * Random.Range(0.9f, 1.1f));
+						}
+					    if (_cs._skill == 2) {
+						    sk = 4 * ES3.Load(_cha + "_BurstSkill", ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString(), 0); // очередь ударов или выстрелов
+						    x = (int) (((d + sk) / ((100.0f + armorMob) / (d + sk))) * Random.Range(0.9f, 1.1f));
+						}
+					    if (_cs._skill == 3) {
+						    sk = 2 * ES3.Load(_cha + "_SlowdownSkill", ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString(), 0); // замедление
+						    x = (int) (((d + sk) / ((100.0f + armorMob) / (d + sk))) * Random.Range(0.9f, 1.1f));
+						}
+					    if (_cs._skill == 4) {
+						    sk = 6 * ES3.Load(_cha + "_StunSkill", ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString(), 0); // оглушение
+						    x = (int) (((d + sk) / ((100.0f + armorMob) / (d + sk))) * Random.Range(0.9f, 1.1f));
+					    }
+					    if (_cs._skill == 7) {
+						    x = 10 * ES3.Load(_cha + "_TheftLivesSkill", ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString(), 0); // кража жизней
+						    
+						    // восстанавливаем HP персонажа
+						    if (_cs.valueHP > 0 && _cs.valueHP < _cse.healthPoints) {
+							    _cs.valueHP += x;
+							    if (_cs.valueHP > _cse.healthPoints) _cs.valueHP = _cse.healthPoints;
+							    _cs.barHP.fillAmount = (float) _cs.valueHP / _cse.healthPoints;
+								
+							    // выводим данные в HP бар
+							    _cs._builder.Length = 0;
+							    _cs._builder.Append(_cs.valueHP);
+							    _cs._builder.Append("/");
+							    _cs._builder.Append(_cse.healthPoints);
+							    _cs._mTextHP.text = _cs._builder.ToString();
+							    
+							    if (_cs.valueHP < (_cse.healthPoints) / 2) {
+								    // настраиваем цвет фильтра Vignette
+								    _cs._mainCameraVignette.weight = (0.5f - _cs.barHP.fillAmount) * 2;
+								    
+								    // выводим красную рамку низкого уровня здоровья
+								    _cs._mainCameraBloodSplash.color = new Color(255f, 0f, 0f, (0.5f - _cs.barHP.fillAmount) * 2);
+							    } else {
+								    // настраиваем цвет фильтра Vignette
+								    _cs._mainCameraVignette.weight = 0f;
+								    
+								    // выводим красную рамку низкого уровня здоровья
+								    _cs._mainCameraBloodSplash.color = new Color(255f, 0f, 0f, 0f);
+							    }
+							    
+							    // сохраняем значение HP персонажа
+							    ES3.Save(_cha + "_CharacterHP", _cs.valueHP, ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString());
+						    }
+							
+						    // если объем HP стал больше максимального
+						    if (_cs.valueHP > _cse.healthPoints) {
+							    _cs.valueHP = _cse.healthPoints;
+								
+							    // выводим данные в HP бар
+							    _cs._builder.Length = 0;
+							    _cs._builder.Append(_cs.valueHP);
+							    _cs._builder.Append("/");
+							    _cs._builder.Append(_cse.healthPoints);
+							    _cs._mTextHP.text = _cs._builder.ToString();
+							    _cs.barHP.fillAmount = 1f;
+								
+							    // сохраняем значение HP персонажа
+							    ES3.Save(_cha + "_CharacterHP", valueHP, ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString());
+						    }
+						}
+				    }
+					
+				    if (_cs._skill != 5 && _cs._skill != 6 && _cs._skill != 8) {
+					    valueHP -= x;
+					    barHP.fillAmount = (float) valueHP / maxHP;
+						
+					    // отменяем прозрачность текста
+					    damageText.canvasRenderer.SetAlpha(1.0f);
+						
+					    // затухание текста
+					    damageText.CrossFadeAlpha(0f, 1f, false);
+						
+					    // выводим урон над мобом
+					    damageText.text = x.ToString();
+						
+					    // сохраняем значение HP моба
+					    ES3.Save(name + "_HP_" + GetComponent<UUID>().ID, valueHP, ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString());
+				    }
+			    }
+				
+			    DeathMonster();
+			    
+			    // выключаем перемещение при ударе
+			    _ap.canMove = false;
+				
+			    // защита от множественного срабатывания
+			    if (!other.name.Equals("Arrow") && !other.name.Equals("Fireball") && !other.name.Equals("Skill")) other.GetComponentInParent<CharacterScript>()._picked = false;
+		    }
+	    }
+	    
+	    if (_cc != null && _cc.CompareTag("Player") && other.CompareTag("Destruction") && !other.isTrigger) {
+		    if (!other.name.Equals("Arrow") && !other.name.Equals("Fireball") && !other.name.Equals("Skill")) {
+			    if ((_an.GetCurrentAnimatorStateInfo(0).IsName("Attack") || _an.GetCurrentAnimatorStateInfo(0).IsName("AttackSeries")) && _attack) {
+				    // активируем разрушение объекта
+				    RayfireRigid rf = other.GetComponentInChildren<RayfireRigid>();
+				    Vector3 tRoot = other.transform.root.localScale;
+				    if (rf.damage.enable) {
+					    if (_options.sliderDistance.selectedOptionIndex > 0 && rf.damage.currentDamage >= 200f && (tRoot.x > 1 || tRoot.y > 1 || tRoot.z > 1)) rf.meshDemolition.amount = (int) (rf.meshDemolition.amount * ((tRoot.x + tRoot.y + tRoot.z) / 3));
+					    rf.ApplyDamage(100f, Vector3.forward);
+				    } else {
+					    if (_options.sliderDistance.selectedOptionIndex > 0) {
+						    if (tRoot.x > 1 || tRoot.y > 1 || tRoot.z > 1) rf.meshDemolition.amount = (int) (rf.meshDemolition.amount * ((tRoot.x + tRoot.y + tRoot.z) / 3));
+						    rf.Demolish();
+					    }
+				    }
+				    
+				    // звук удара
+				    AudioSourceClip(hitSound);
+			    }
+		    }
+	    }
+    }
+    
+    private void OnTriggerExit(Collider other) {
+	    // выход из границы уровня
+	    if (_cc != null && _cc.CompareTag("Player") && other.CompareTag("Border")) {
+		    _teleportCollider--;
+		    if (_teleportCollider == 0) {
+			    _teleportTimer = 0;
+			    _notificationBorder.SetActive(false);
+			    CancelInvoke(nameof(TeleportTimer));
+		    }
+	    }
+    }
+    
+    public void AlertObservers(string message) {
+	    // отменяем анимацию удара
+	    if (message.Equals("HitEnd")) {
+		    _an.SetBool("Hit", false);
+		    _attackMob = false;
+	    }
+	    
+	    // половина анимации атаки
+	    if (message.Equals("AttackHalf") && !_series) {
+		    _attack = false;
+		    _array.Clear();
+	    }
+	    
+	    // полная анимация атаки
+	    if (message.Equals("AttackEnd")) {
+		    if (_cse.meshEffect.gameObject.activeSelf) Invoke(nameof(TimerOnSkill), 0.25f);
+		    _an.SetBool("Attack", false);
+		    _an.SetBool("AttackSeries", false);
+		    _an.SetBool("Skill", false);
+		    _attack = false;
+		    _attackMob = false;
+		    _series = false;
+		    _array.Clear();
+	    }
+    }
+    
+    private void Regenerate() {
+	    if (!regDebuff && !_an.GetCurrentAnimatorStateInfo(0).IsName("Death")) {
+		    // восстанавливаем HP персонажа
+		    if (valueHP > 0 && valueHP < _cse.healthPoints) {
+			    valueHP += reg + _cse.regenHP;
+			    
+			    // если объем HP стал больше максимального
+			    if (valueHP > _cse.healthPoints) {
+				    valueHP = _cse.healthPoints;
+				    barHP.fillAmount = 1f;
+			    }
+			    
+			    barHP.fillAmount = _hpBackground.fillAmount = (float) valueHP / _cse.healthPoints;
+			    ES3.Save(_cha + "_CharacterHP", valueHP, ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString());
+		    }
+		    
+		    // восстанавливаем MP персонажа
+		    if (valueMP < _cse.manaPoints) {
+			    valueMP += reg + _cse.regenMP;
+			    
+			    // если объем MP стал больше максимального
+			    if (valueMP > _cse.manaPoints) {
+				    valueMP = _cse.manaPoints;
+				    barMP.fillAmount = 1f;
+			    }
+			    
+			    barMP.fillAmount = _mpBackground.fillAmount = (float) valueMP / _cse.manaPoints;
+			    ES3.Save(_cha + "_CharacterMP", valueMP, ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString());
+		    }
+		    
+		    // если объем MP стал больше максимального
+		    if (valueMP > _cse.manaPoints) {
+			    valueMP = _cse.manaPoints;
+			    barMP.fillAmount = 1f;
+		    }
+		    
+		    // выводим данные в HP бар
+		    _builder.Length = 0;
+		    _builder.Append(valueHP);
+		    _builder.Append("/");
+		    _builder.Append(_cse.healthPoints);
+		    _mTextHP.text = _builder.ToString();
+		    
+		    // выводим данные в MP бар
+		    _builder.Length = 0;
+		    _builder.Append(valueMP);
+		    _builder.Append("/");
+		    _builder.Append(_cse.manaPoints);
+		    _mTextMP.text = _builder.ToString();
+	    }
+	    
+	    if (_cs.valueHP < (_cse.healthPoints) / 2) {
+		    // настраиваем цвет фильтра Vignette
+		    _cs._mainCameraVignette.weight = (0.5f - _cs.barHP.fillAmount) * 2;
+		    
+		    // выводим красную рамку низкого уровня здоровья
+		    _cs._mainCameraBloodSplash.color = new Color(255f, 0f, 0f, (0.5f - _cs.barHP.fillAmount) * 2);
+	    } else {
+		    // настраиваем цвет фильтра Vignette
+		    _cs._mainCameraVignette.weight = 0f;
+		    
+		    // выводим красную рамку низкого уровня здоровья
+		    _cs._mainCameraBloodSplash.color = new Color(255f, 0f, 0f, 0f);
+	    }
+	    
+	    // меняем цвет активных скилов
+	    if (!_color && valueMP < 20) {
+		    _color = true;
+		    foreach (GameObject source in _cse.skillImg1.Concat(_cse.skillImg2).Concat(_cse.skillImg3)) { source.GetComponent<Image>().color = new Color32(64,64,64,225); }
+			
+		    if (InterfacePC) {
+			    foreach (GameObject source in _cse.skillImg4.Concat(_cse.skillImg5).Concat(_cse.skillImg6.Concat(_cse.skillImg7).Concat(_cse.skillImg8))) { source.GetComponent<Image>().color = new Color32(64,64,64,225); }
+		    }
+	    } 
+	    if (_color && valueMP >= 20) {
+		    _color = false;
+		    foreach (GameObject source in _cse.skillImg1.Concat(_cse.skillImg2).Concat(_cse.skillImg3)) { source.GetComponent<Image>().color = new Color32(225,225,225,225); }
+			
+		    if (InterfacePC) {
+			    foreach (GameObject source in _cse.skillImg4.Concat(_cse.skillImg5).Concat(_cse.skillImg6.Concat(_cse.skillImg7).Concat(_cse.skillImg8))) { source.GetComponent<Image>().color = new Color32(225,225,225,225); }
+		    }
+	    }
+    }
+    
+    public void DoT() {
+	    // отнимаем HP персонажа
+	    if (valueHP > 0) {
+		    valueHP -= reg * 2;
+		    barHP.fillAmount = (float) valueHP / _cse.healthPoints;
+			
+		    // выводим данные в HP бар
+		    _builder.Length = 0;
+		    _builder.Append(valueHP);
+		    _builder.Append("/");
+		    _builder.Append(_cse.healthPoints);
+		    _mTextHP.text = _builder.ToString();
+		    
+		    if (_cs.valueHP < (_cse.healthPoints) / 2) {
+			    // настраиваем цвет фильтра Vignette
+			    _cs._mainCameraVignette.weight = (0.5f - _cs.barHP.fillAmount) * 2;
+			    
+			    // выводим красную рамку низкого уровня здоровья
+			    _cs._mainCameraBloodSplash.color = new Color(255f, 0f, 0f, (0.5f - _cs.barHP.fillAmount) * 2);
+		    } else {
+			    // настраиваем цвет фильтра Vignette
+			    _cs._mainCameraVignette.weight = 0f;
+			    
+			    // выводим красную рамку низкого уровня здоровья
+			    _cs._mainCameraBloodSplash.color = new Color(255f, 0f, 0f, 0f);
+		    }
+			
+		    // сохраняем значение HP персонажа
+		    ES3.Save(_cha + "_CharacterHP", valueHP, ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString());
+	    }
+		
+	    // если объем HP стал меньше минимального
+	    if (valueHP <= 0) {
+		    DeathPlayer();
+		    
+		    // сохраняем значение HP персонажа
+		    ES3.Save(_cha + "_CharacterHP", valueHP, ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString());
+	    }
+    }
+    
+    public void TaskOnAttack(int s) {
+	    if (!_attack && _repeat == 0 && !_an.GetCurrentAnimatorStateInfo(0).IsName("Attack") && !_an.GetCurrentAnimatorStateInfo(0).IsName("AttackSeries")) {
+		    _skill = s;
+		    _an.SetFloat("animSpeed", _cse.attackSpeed * 0.8f);
+		    
+		    // проверяем тип оружия персонажа
+		    Boolean attack = false;
+		    if (ES3.KeyExists(_cha + "_PlayerSlotsGrid_Weapon_MainHand", ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString())) {
+			    foreach (UIEquipSlot slot in _slotsCenter) {
+				    if (slot.IsAssigned() && !slot.GetItemInfo().Type.Equals("Staff") && !slot.GetItemInfo().Type.Equals("Bow") && !slot.GetItemInfo().Type.Equals("Shield")) {
+					    if (s == 0) { attack = true; }
+					    if (s == 1 && valueMP >= 20 && ES3.Load(_cha + "_CharacterClass", ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString(), 1) == 1) { Invoke(nameof(TaskOnSkill), 0f); Invoke(nameof(TimerOnManaSkill), 0f); attack = true; }
+					    if (s == 2 && valueMP >= 20 && ES3.Load(_cha + "_CharacterClass", ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString(), 1) == 1) { InvokeRepeating(nameof(TaskOnSkill), 0.5f,0.5f); Invoke(nameof(TimerOnManaSkill), 0.5f); attack = true; }
+					    if ((s == 3 || s == 4 || s == 5) && valueMP >= 20) { Invoke(nameof(TaskOnSkill), 0.5f); Invoke(nameof(TimerOnManaSkill), 0.5f); attack = true; }
+					    if (s == 6 && valueMP >= 20) { Invoke(nameof(TaskOnSkill), 0f); Invoke(nameof(TimerOnManaSkill), 0f); attack = true; }
+					    if (s == 7 && closest != null && valueMP >= 20) { Invoke(nameof(TaskOnSkill), 0.5f); Invoke(nameof(TimerOnManaSkill), 0.5f); attack = true; }
+					    if (s == 8 && closest != null && valueMP >= 20) { Invoke(nameof(TaskOnSkill), 0.5f); Invoke(nameof(TimerOnManaSkill), 0.5f); attack = true; }
+				    }
+				    
+				    if (slot.IsAssigned() && slot.GetItemInfo().Type.Equals("Staff")) {
+					    if (s == 0 && valueMP >= 10) { Invoke(nameof(FireballOnAttack), 0.5f); Invoke(nameof(TimerOnManaDefault), 0.5f); attack = true; }
+					    if (s == 1 && valueMP >= 20 && ES3.Load(_cha + "_CharacterClass", ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString(), 1) == 2) { Invoke(nameof(TaskOnSkill), 0.5f); Invoke(nameof(TimerOnManaSkill), 0.5f); attack = true; }
+					    if (s == 2 && valueMP >= 20 && ES3.Load(_cha + "_CharacterClass", ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString(), 1) == 2) { InvokeRepeating(nameof(TaskOnSkill), 0.5f,0.5f); Invoke(nameof(TimerOnManaSkill), 0.5f); attack = true; }
+					    if ((s == 3 || s == 4 || s == 5) && valueMP >= 20) { Invoke(nameof(TaskOnSkill), 0.5f); Invoke(nameof(TimerOnManaSkill), 0.5f); attack = true; }
+					    if (s == 6 && valueMP >= 20) { Invoke(nameof(TaskOnSkill), 0f); Invoke(nameof(TimerOnManaSkill), 0f); attack = true; }
+					    if (s == 7 && closest != null && valueMP >= 20) { Invoke(nameof(TaskOnSkill), 0.5f); Invoke(nameof(TimerOnManaSkill), 0.5f); attack = true; }
+					    if (s == 8 && closest != null && valueMP >= 20) { Invoke(nameof(TaskOnSkill), 0.5f); Invoke(nameof(TimerOnManaSkill), 0.5f); attack = true; }
+				    }
+					
+				    if (slot.IsAssigned() && slot.GetItemInfo().Type.Equals("Bow")) {
+					    if (s == 0) { Invoke(nameof(ArrowOnAttack), 0.5f); attack = true; }
+					    if (s == 1 && valueMP >= 20 && ES3.Load(_cha + "_CharacterClass", ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString(), 1) == 3) { Invoke(nameof(TaskOnSkill), 0.5f); Invoke(nameof(TimerOnManaSkill), 0.5f); attack = true; }
+					    if (s == 2 && valueMP >= 20 && ES3.Load(_cha + "_CharacterClass", ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString(), 1) == 3) { InvokeRepeating(nameof(TaskOnSkill), 0.5f,0.5f); Invoke(nameof(TimerOnManaSkill), 0.5f); attack = true; }
+					    if ((s == 3 || s == 4 || s == 5) && valueMP >= 20) { Invoke(nameof(TaskOnSkill), 0.5f); Invoke(nameof(TimerOnManaSkill), 0.5f); attack = true; }
+					    if (s == 6 && valueMP >= 20) { Invoke(nameof(TaskOnSkill), 0f); Invoke(nameof(TimerOnManaSkill), 0f); attack = true; }
+					    if (s == 7 && closest != null && valueMP >= 20) { Invoke(nameof(TaskOnSkill), 0.5f); Invoke(nameof(TimerOnManaSkill), 0.5f); attack = true; }
+					    if (s == 8 && closest != null && valueMP >= 20) { Invoke(nameof(TaskOnSkill), 0.5f); Invoke(nameof(TimerOnManaSkill), 0.5f); attack = true; }
+				    }
+				    
+				    if (attack && !_attack) {
+					    attack = false;
+						
+					    // таймер защиты от множественного срабатывания
+					    if (s < 2 && !slot.GetItemInfo().Type.Equals("Staff") && !slot.GetItemInfo().Type.Equals("Bow") && !slot.GetItemInfo().Type.Equals("Shield")) {
+						    Invoke(nameof(TimerOnWeapon), (0.3f / _cse.attackSpeed));
+						    
+						    // звук ближней атаки
+						    AudioSourceClip(attackSound);
+					    } else {
+						    _attack = true;
+						    if (s == 2) Invoke(nameof(TimerOnSkill), (3.5f / _cse.attackSpeed));
+						    else Invoke(nameof(TimerOnSkill), (1.5f / _cse.attackSpeed));
+					    }
+					    
+					    if (closest != null && s != 6) {
+						    // останавливаем работу Coroutine
+						    _pm.relativePos = true;
+						    
+						    // поворачиваем персонажа к цели
+						    _relativePos = closest.transform.position - _tr.position;
+						    _relativePos.y = 0f;
+						    _tr.rotation = Quaternion.LookRotation(_relativePos);
+					    }
+					    
+					    // скорость анимации для очереди 2 скила
+					    if (s == 2) _an.SetFloat("animSpeed", 0.35f);
+					    
+					    // анимация атаки персонажа
+					    if (s != 6 && (slot.GetItemInfo().Type.Equals("Staff") || slot.GetItemInfo().Type.Equals("Bow"))) _an.SetBool("Attack", true);
+					    if (s < 2 && !slot.GetItemInfo().Type.Equals("Staff") && !slot.GetItemInfo().Type.Equals("Bow") && !slot.GetItemInfo().Type.Equals("Shield")) _an.SetBool("Attack", true);
+					    if (s > 1 && s != 6 && !slot.GetItemInfo().Type.Equals("Staff") && !slot.GetItemInfo().Type.Equals("Bow") && !slot.GetItemInfo().Type.Equals("Shield")) {
+						    _an.SetBool("Skill", true);
+						    
+						    // отключаем отображение оружия
+						    _cse._sword.GetComponent<MeshRenderer>().enabled = false;
+						    _cse._staff.GetComponent<MeshRenderer>().enabled = false;
+						    _cse._bow.GetComponent<MeshRenderer>().enabled = false;
+						    _cse._axe.GetComponent<MeshRenderer>().enabled = false;
+						    _cse._club.GetComponent<MeshRenderer>().enabled = false;
+						    _cse._hammer.GetComponent<MeshRenderer>().enabled = false;
+						    _cse._peak.GetComponent<MeshRenderer>().enabled = false;
+					    }
+					    
+					    // запускаем анимацию Cooldowns
+					    if (s > 0) _cse.Cooldown(s - 1);
+				    }
+			    }
+		    }
+	    }
+	    
+	    if (s == 0 && _attack && !_an.GetCurrentAnimatorStateInfo(0).IsName("AttackSeries")) {
+		    _an.SetFloat("animSpeed", _cse.attackSpeed * 0.8f);
+		    
+		    // проверяем тип оружия персонажа
+		    if (ES3.KeyExists(_cha + "_PlayerSlotsGrid_Weapon_MainHand", ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString())) {
+			    foreach (UIEquipSlot slot in _slotsCenter) {
+				    if (slot.IsAssigned() && !slot.GetItemInfo().Type.Equals("Staff") && !slot.GetItemInfo().Type.Equals("Bow") && !slot.GetItemInfo().Type.Equals("Shield")) {
+					    _series = true;
+					    _array.Clear();
+					    
+					    // анимация атаки серии ударов персонажа
+					    _an.SetBool("AttackSeries", true);
+				    }
+			    }
+		    }
+	    }
+    }
+    
+    private void FireballOnAttack() {
+	    // создаем копию магического снаряда
+	    _go = Instantiate(skillDefault[0], shellSpawn.position, Quaternion.identity);
+	    _go.name = "Fireball";
+	    
+	    // добавляем урон для снаряда
+	    if (_cc.CompareTag("Monster")) _go.GetComponent<FireballMonster>().damageMob = damageMob;
+	    
+	    // подключаем физику снаряда
+	    Rigidbody rb = _go.GetComponent<Rigidbody>();
+	    
+	    // задаем направление и скорость снаряда
+	    if (_cc.CompareTag("Player")) {
+		    if (closest != null) rb.velocity = Quaternion.LookRotation(closest.transform.position - _tr.position) * Vector3.forward * 20f;
+		    else rb.velocity = Quaternion.LookRotation(_tr.forward) * Vector3.forward * 20f;
+	    } else {
+		    rb.velocity = Quaternion.LookRotation(_target.position - _tr.position) * Vector3.forward * 20f;
+	    }
+	    
+	    // звук дальней атаки
+	    if (_cc.CompareTag("Player")) AudioSourceClip(shotStaff);
+	    if (_cc.CompareTag("Monster")) AudioSourceClip(hitSound);
+    }
+	
+    private void ArrowOnAttack() {
+	    // создаем копию стрелы
+	    _go = Instantiate(skillDefault[1], shellSpawn.position, Quaternion.identity);
+	    _go.name = "Arrow";
+	    
+	    // добавляем урон для снаряда
+	    if (_cc.CompareTag("Monster")) _go.GetComponent<ArrowMonster>().damageMob = damageMob;
+	    
+	    // подключаем физику снаряда
+	    Rigidbody rb = _go.GetComponent<Rigidbody>();
+	    
+	    // задаем направление и скорость снаряда
+	    if (_cc.CompareTag("Player")) {
+		    if (closest != null) rb.velocity = Quaternion.LookRotation(closest.transform.position - _tr.position) * Vector3.forward * 20f;
+		    else rb.velocity = Quaternion.LookRotation(_tr.forward) * Vector3.forward * 20f;
+	    } else {
+		    rb.velocity = Quaternion.LookRotation(_target.position - _tr.position) * Vector3.forward * 20f;
+	    }
+		
+	    // звук дальней атаки
+	    if (_cc.CompareTag("Player")) AudioSourceClip(shotBow);
+	    if (_cc.CompareTag("Monster")) AudioSourceClip(hitSound);
+    }
+	
+    private void TaskOnSkill() {
+	    // создаем копию магического снаряда
+	    if (_skill == 1 && ES3.Load(_cha + "_CharacterClass", ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString(), 1) == 1) {
+		    if (_cse._sword.activeSelf) {
+			    _cse.meshEffect.MeshObject = _cse._sword;
+			    _cse.meshEffect.gameObject.SetActive(true);
+			    _cse.meshEffect.UpdateMeshEffect(_cse._sword);
+		    }
+		    if (_cse._axe.activeSelf) {
+			    _cse.meshEffect.MeshObject = _cse._axe;
+			    _cse.meshEffect.gameObject.SetActive(true);
+			    _cse.meshEffect.UpdateMeshEffect(_cse._axe);
+		    }
+		    if (_cse._club.activeSelf) {
+			    _cse.meshEffect.MeshObject = _cse._club;
+			    _cse.meshEffect.gameObject.SetActive(true);
+			    _cse.meshEffect.UpdateMeshEffect(_cse._club);
+		    }
+		    if (_cse._hammer.activeSelf) {
+			    _cse.meshEffect.MeshObject = _cse._hammer;
+			    _cse.meshEffect.gameObject.SetActive(true);
+			    _cse.meshEffect.UpdateMeshEffect(_cse._hammer);
+		    }
+		    if (_cse._peak.activeSelf) {
+			    _cse.meshEffect.MeshObject = _cse._peak;
+			    _cse.meshEffect.gameObject.SetActive(true);
+			    _cse.meshEffect.UpdateMeshEffect(_cse._peak);
+		    }
+	    }
+	    if (_skill == 1 && ES3.Load(_cha + "_CharacterClass", ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString(), 1) == 2) _go = Instantiate(skillActive[1], shellSpawn.position, Quaternion.identity);
+	    if (_skill == 1 && ES3.Load(_cha + "_CharacterClass", ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString(), 1) == 3) _go = Instantiate(skillActive[2], shellSpawn.position, Quaternion.identity);
+	    if (_skill == 2 && ES3.Load(_cha + "_CharacterClass", ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString(), 1) == 1) {
+		    if (_cse._sword.activeSelf) _go = Instantiate(skillActive[3], _cse._sword.transform.position, Quaternion.identity);
+		    if (_cse._axe.activeSelf) _go = Instantiate(skillActive[3], _cse._axe.transform.position, Quaternion.identity);
+		    if (_cse._club.activeSelf) _go = Instantiate(skillActive[3], _cse._club.transform.position, Quaternion.identity);
+		    if (_cse._hammer.activeSelf) _go = Instantiate(skillActive[3], _cse._hammer.transform.position, Quaternion.identity);
+		    if (_cse._peak.activeSelf) _go = Instantiate(skillActive[3], _cse._peak.transform.position, Quaternion.identity);
+	    }
+	    if (_skill == 2 && ES3.Load(_cha + "_CharacterClass", ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString(), 1) == 2) _go = Instantiate(skillActive[4], shellSpawn.position, Quaternion.identity);
+	    if (_skill == 2 && ES3.Load(_cha + "_CharacterClass", ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString(), 1) == 3) _go = Instantiate(skillActive[5], shellSpawn.position, Quaternion.identity);
+	    if (_skill == 3) {
+		    if (closest != null) _go = Instantiate(skillActive[6], closest.GetComponent<CharacterController>().bounds.center, Quaternion.identity);
+		    else _go = Instantiate(skillActive[6], shellSpawn.position, Quaternion.identity);
+	    }
+	    if (_skill == 4) {
+		    if (closest != null) _go = Instantiate(skillActive[7], closest.GetComponent<CharacterController>().bounds.center, Quaternion.identity);
+		    else _go = Instantiate(skillActive[7], shellSpawn.position, Quaternion.identity);
+	    }
+	    if (_skill == 5) {
+		    if (closest != null) _go = Instantiate(skillActive[8], closest.GetComponent<CharacterController>().bounds.center, Quaternion.identity);
+		    else _go = Instantiate(skillActive[8], shellSpawn.position, Quaternion.identity);
+	    }
+	    if (_skill == 6) _go = Instantiate(skillActive[9], _cc.bounds.center, Quaternion.identity);
+	    if (_skill == 7) _go = Instantiate(skillActive[10], closest.GetComponent<CharacterController>().bounds.center, Quaternion.identity);
+	    if (_skill == 8) _go = Instantiate(skillActive[11], closest.GetComponent<CharacterController>().bounds.center, Quaternion.identity);
+	    
+	    // подключаем физику снаряда
+	    Rigidbody rb = new Rigidbody();
+	    if (_go != null) {
+		    _go.name = "Skill";
+		    rb = _go.GetComponent<Rigidbody>();
+	    }
+	    
+	    // задаем направление и скорость снаряда
+	    if (_skill == 1 && ES3.Load(_cha + "_CharacterClass", ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString(), 1) > 1) {
+		    if (closest != null) rb.velocity = Quaternion.LookRotation(closest.transform.position - _tr.position) * Vector3.forward * 20f;
+		    else rb.velocity = Quaternion.LookRotation(_tr.forward) * Vector3.forward * 20f;
+	    }
+	    if (_skill == 2) {
+		    if (closest != null) rb.velocity = Quaternion.LookRotation(closest.transform.position - _tr.position) * Vector3.forward * 20f;
+		    else rb.velocity = Quaternion.LookRotation(_tr.forward) * Vector3.forward * 20f;
+	    }
+	    if (_skill == 3 || _skill == 5 || _skill == 8) {
+		    if (closest != null) rb.velocity = Quaternion.LookRotation(closest.transform.position - _tr.position) * Vector3.forward;
+		    else rb.velocity = Quaternion.LookRotation(_tr.forward) * Vector3.forward * 20f;
+	    }
+	    if (_skill == 6) _go.GetComponent<Rigidbody>().transform.SetParent(_player.transform);
+	    if (_skill == 7) rb.velocity = Quaternion.LookRotation(_player.transform.position - closest.transform.position) * Vector3.forward * 20f;
+	    
+	    // звук дальней атаки
+	    AudioSourceClip(shotStaff);
+		
+	    // ограничиваем количестов выстрелов
+	    if (_skill == 2) {
+		    _repeat++;
+		    if (_repeat == 3) {
+			    _repeat = 0;
+			    _an.SetFloat("animSpeed", _cse.attackSpeed * 0.8f);
+			    CancelInvoke(nameof(TaskOnSkill));
+		    }
+	    }
+    }
+    
+    private void TimerOnWeapon() {
+	    _attack = true;
+    }
+	
+    private void TimerOnSkill() {
+	    _attack = false;
+	    if (_cse.meshEffect.gameObject.activeSelf) _cse.meshEffect.gameObject.SetActive(false);
+	    
+	    // включаем отображение оружия
+	    if (ES3.KeyExists(_cha + "_PlayerSlotsGrid_Weapon_MainHand", ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString())) {
+		    foreach (UIEquipSlot slot in _slotsCenter) {
+			    if (slot.IsAssigned() && slot.GetItemInfo().Type.Equals("Sword")) _cse._sword.GetComponent<MeshRenderer>().enabled = true;
+			    if (slot.IsAssigned() && slot.GetItemInfo().Type.Equals("Staff")) _cse._staff.GetComponent<MeshRenderer>().enabled = true;
+			    if (slot.IsAssigned() && slot.GetItemInfo().Type.Equals("Bow")) _cse._bow.GetComponent<MeshRenderer>().enabled = true;
+			    if (slot.IsAssigned() && slot.GetItemInfo().Type.Equals("Axe")) _cse._axe.GetComponent<MeshRenderer>().enabled = true;
+			    if (slot.IsAssigned() && slot.GetItemInfo().Type.Equals("Club")) _cse._club.GetComponent<MeshRenderer>().enabled = true;
+			    if (slot.IsAssigned() && slot.GetItemInfo().Type.Equals("Hammer")) _cse._hammer.GetComponent<MeshRenderer>().enabled = true;
+			    if (slot.IsAssigned() && slot.GetItemInfo().Type.Equals("Peak")) _cse._peak.GetComponent<MeshRenderer>().enabled = true;
+		    }
+	    }
+    }
+    
+    private void TimerOnManaDefault() {
+	    valueMP -= 10;
+	    barMP.fillAmount = (float) valueMP / _cse.manaPoints;
+	    
+	    // выводим данные в MP бар
+	    _builder.Length = 0;
+	    _builder.Append(valueMP);
+	    _builder.Append("/");
+	    _builder.Append(_cse.manaPoints);
+	    _mTextMP.text = _builder.ToString();
+    }
+    
+    private void TimerOnManaSkill() {
+	    valueMP -= 20;
+	    barMP.fillAmount = (float) valueMP / _cse.manaPoints;
+	    
+	    // выводим данные в MP бар
+	    _builder.Length = 0;
+	    _builder.Append(valueMP);
+	    _builder.Append("/");
+	    _builder.Append(_cse.manaPoints);
+	    _mTextMP.text = _builder.ToString();
+    }
+    
+    private void FindClosestEnemy() {
+	    if (_mobs.Length > 0 && _repeat == 0) {
+		    closest = null;
+		    float distance = Mathf.Infinity;
+		    Vector3 position = _tr.position;
+		    foreach (GameObject obj in _mobs) {
+			    if (obj != null && obj.activeSelf && !obj.GetComponent<Animator>().GetCurrentAnimatorStateInfo(0).IsName("Death")) {
+				    // проверка видимости и расстояния до моба
+				    if (obj.GetComponent<OptimizerMonster>().curDistance < obj.GetComponent<OptimizerMonster>().minDistance + _cse.rangeAttack * 5) {
+					    // отключаем обводку всех мобов
+					    obj.GetComponentInChildren<Outlinable>().OutlineParameters.Enabled = false;
+						
+					    Vector3 diff = obj.transform.position - position;
+					    float curDistance = diff.sqrMagnitude;
+					    if (curDistance < distance) {
+						    closest = obj;
+						    distance = curDistance;
+					    }
+				    }
+			    }
+		    }
+		    
+		    if (closest != null && !closest.GetComponent<Animator>().GetCurrentAnimatorStateInfo(0).IsName("Death")) {
+			    // проверка видимости и расстояния до моба
+			    if (closest.GetComponent<OptimizerMonster>().curDistance != 0 && closest.GetComponent<OptimizerMonster>().curDistance < closest.GetComponent<OptimizerMonster>().minDistance + _cse.rangeAttack * 5) {
+				    // включаем обводку ближайшего моба
+				    closest.GetComponentInChildren<Outlinable>().OutlineParameters.Enabled = true;
+				    
+				    // запускаем смену саундтрека
+				    if (_sound != null) _sound.peaceSound = false;
+				    
+				    // выключаем возможность перемещаться
+				    _gm.tr = true;
+				    
+				    // выключаем возможность поворота камеры
+				    _rpgCam.rt = true;
+			    } else {
+				    // запускаем смену саундтрека
+				    if (_sound != null) _sound.peaceSound = true;
+				    
+				    // включаем возможность перемещаться
+				    _gm.tr = false;
+				    
+				    // включаем возможность поворота камеры
+				    _rpgCam.rt = false;
+			    }
+		    } else {
+			    // запускаем смену саундтрека
+			    if (_sound != null) _sound.peaceSound = true;
+			    
+			    // включаем возможность перемещаться
+			    _gm.tr = false;
+			    
+			    // включаем возможность поворота камеры
+			    _rpgCam.rt = false;
+		    }
+	    } else closest = null;
+    }
+	
+    public void DeathPlayer() {
+	    if (!death && valueHP <= 0) {
+		    death = true;
+		    
+		    // анимация смерти
+		    _an.SetBool("Death", true);
+		    
+		    // выключаем остальную анимацию
+		    _an.SetBool("Hit", false);
+		    _an.SetBool("Attack", false);
+		    _an.SetBool("AttackSeries", false);
+		    _an.SetBool("Walk", false);
+		    _an.SetBool("Run", false);
+		    
+		    // звук смерти
+		    AudioSourceClip(deathSound);
+		    
+		    // виброотдача при смерти
+		    if (_options.sliderVibro.isOn) HapticPatterns.PlayPreset(HapticPatterns.PresetType.MediumImpact);
+		    
+		    // обнуляем значения
+		    barHP.fillAmount = valueHP = 0;
+		    
+		    // выводим данные в HP бар
+		    _builder.Length = 0;
+		    _builder.Append("0");
+		    _builder.Append("/");
+		    _builder.Append(_cse.healthPoints);
+		    _mTextHP.text = _builder.ToString();
+	    } else {
+		    // выводим данные в HP бар
+		    _builder.Length = 0;
+		    _builder.Append(valueHP);
+		    _builder.Append("/");
+		    _builder.Append(_cse.healthPoints);
+		    _mTextHP.text = _builder.ToString();
+	    }
+    }
+	
+    public void DeathMonster() {
+	    if (!death && valueHP <= 0) {
+		    death = true;
+		    _cs._exp = true;
+		    
+		    // анимация смерти
+		    if (!_an.enabled) _an.enabled = true;
+		    _an.SetBool("Death", true);
+		    
+		    // выключаем остальную анимацию
+		    _an.SetBool("Hit", false);
+		    _an.SetBool("Attack", false);
+		    _an.SetBool("Walk", false);
+		    if (!name.Equals("Zombie")) _an.SetBool("Run", false);
+		    
+		    // звук смерти
+		    AudioSourceClip(deathSound);
+		    
+		    // сохраняем прогресс опыта персонажа
+		    ES3.Save(_cha + "_CharacterExp", ES3.Load(_cha + "_CharacterExp", ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString(), 0f) + (float) valueExp / maxExp, ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString());
+	    }
+    }
+	
+    public void AudioSourceClip(AudioClip sound) {
+	    if (!_audioSource.isPlaying || _audioSource.clip != sound) {
+		    _audioSource.clip = sound;
+		    
+		    // настраиваем громкость звуковых эффектов
+		    if (_options.sliderVolume.value > 0.01f && _options.sliderVolumeEffects.value > 0.01f) _audioSource.PlayOneShot(sound, (_options.sliderVolume.value + _options.sliderVolumeEffects.value) / 2);
+		    else _audioSource.PlayOneShot(sound, 0f);
+	    }
+    }
+	
+    public IEnumerator TaskOnMenu() {
+	    if (_cc != null && _cc.CompareTag("Player")) {
+		    // ставим игру на паузу
+		    Time.timeScale = 0;
+			
+		    // запоминаем позицию персонажа и камеры
+		    ES3.Save(_cha + "_PlayerPosition", _tr.position, ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString());
+		    ES3.Save(_cha + "_PlayerRotation", _tr.rotation, ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString());
+		    ES3.Save(_cha + "_CameraPosition", _mainCamera.transform.position, ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString());
+		    ES3.Save(_cha + "_CameraRotation", _mainCamera.transform.rotation, ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString());
+		    
+		    // производим поиск мобов в массиве
+		    if (_mobs.Length > 0) {
+			    foreach (GameObject obj in _mobs) {
+				    if (obj != null && !obj.GetComponent<Animator>().GetCurrentAnimatorStateInfo(0).IsName("Death")) {
+					    // проверка передвижения моба
+					    if (obj.GetComponent<AIPath>().enabled) {
+						    // запоминаем позицию моба
+						    ES3.Save(obj.GetComponent<CharacterScript>().name + "_Position_" + obj.GetComponent<UUID>().ID, obj.transform.position, ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString());
+						    ES3.Save(obj.GetComponent<CharacterScript>().name + "_Rotation_" + obj.GetComponent<UUID>().ID, obj.transform.rotation, ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString());
+					    }
+				    }
+			    }
+		    }
+	    }
+	    yield return null;
+    }
+	
+    private void TeleportTimer() {
+	    _teleportTimer++;
+	    _notificationBorder.SetActive(true);
+	    if (_teleportTimer > 5) Transition(SceneManager.GetActiveScene().buildIndex);
+    }
+    
+    private void Transition(int scene) {
+	    // обнуляем значение
+	    ES3.Save("Continue", false);
+	    ES3.Save("EnterBonePalaces", false, ES3.Load("CharacterActive", ES3Settings.defaultSettings).ToString());
+        
+	    // выключаем все звуки из прошлой сцены
+	    GameObject[] sourceSound = GameObject.FindGameObjectsWithTag("Sound");
+	    foreach(GameObject go in sourceSound) {
+		    go.SetActive(false);
+	    }
+        
+	    // загружаем указанную сцену
+	    UILoadingOverlay loadingOverlay = UILoadingOverlayManager.Instance.Create();
+	    loadingOverlay.LoadScene(scene);
+    }
+    
+    private void ColliderStorage() {
+	    col.enabled = true;
+    }
+	
+    public void TaskOnResume() {
+	    // выключаем активную паузу
+	    Time.timeScale = 1;
+    }
+	
+    private void OnApplicationFocus(bool hasFocus) {
+	    if (hasFocus) TaskOnResume();
+    }
+    
+    private void OnApplicationPause(bool pauseStatus) {
+	    if (pauseStatus) StartCoroutine(TaskOnMenu());
+    }
+    
+    private void OnApplicationQuit() {
+	    StartCoroutine(TaskOnMenu());
+    }
+	
+    private IEnumerator InitializationScripts() {
+	    if (_mobs.Length > 0) {
+		    foreach (GameObject obj in _mobs) {
+			    if (obj != null && !obj.GetComponent<Animator>().GetCurrentAnimatorStateInfo(0).IsName("Death")) {
+				    obj.GetComponent<Storage>().enabled = true;
+				    obj.GetComponent<CharacterScript>().enabled = true;
+			    }
+		    }
+	    }
+	    yield return null;
+    }
+}
